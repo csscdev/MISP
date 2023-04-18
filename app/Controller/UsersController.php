@@ -1208,6 +1208,17 @@ class UsersController extends AppController
         $formLoginEnabled = isset($this->Auth->authenticate['Form']);
         $this->set('formLoginEnabled', $formLoginEnabled);
 
+        if ($this->request->is('post')) {
+            $user = $this->Auth->identify($this->request, $this->response);
+            if ($user && !$user['disabled']) {
+                if ($oldHash) {
+                    $passwordToSave = $this->request->data['User']['password'];
+                    $this->User->save(['id' => $this->Auth->user('id'), 'password' => $passwordToSave], false, ['password']);
+                }
+                return $this->login_2fa($user);
+            }
+        }
+
         if ($this->Auth->login()) {
             if ($oldHash) {
                 // Convert old style password hash to blowfish
@@ -2902,5 +2913,114 @@ class UsersController extends AppController
         # changes.
         # To use this, set Plugin.CustomAuth_custom_logout to /users/logout401
         $this->response->statusCode(401);
+    }
+
+    /**
+     * @throws Exception
+     */
+    public function login_2fa($user): ?CakeResponse
+    {
+        if (!$this->request->is('post')) {
+            throw new MethodNotAllowedException(__('This functionality is only accessible via POST requests.'));
+        }
+        $ga = new PHPGangsta_GoogleAuthenticator();
+
+        $this->User->id = $user['id'];
+        $existingKey = $user['2fa_key'];
+        $code = !empty($this->request->data['User']['code']) ? $this->request->data['User']['code'] : null;
+        $secret = !empty($this->request->data['User']['secret']) ? $this->request->data['User']['secret']: null;
+        $errors = array();
+
+        if (empty($secret)) {
+            $secret = $ga->createSecret();
+        }
+
+        if (empty($existingKey)) { // Creating the new key
+            if (!empty($secret) && !empty($code)) {
+                if ($this->request->data['User']['confirmed_backup'] != '1') {
+                    $errors[] = __('Please backup your 16 digit key before proceeding.');
+                }
+                if (empty($errors)) {
+                    if ($ga->verifyCode($secret, $code, 2)) {
+                        if ($this->User->saveField('2fa_key', $secret)) {
+                            $this->Flash->success(
+                                __('Two-factor authentication (2FA) is enabled.'),
+                                array('class' => 'alert alert-success'));
+                            $this->Auth->login($user);
+                            $this->_postlogin();
+                            return null;
+                        } else {
+                            $errors[] = __("Can't update user. Please try again later.");
+                        }
+                    } else {
+                        $errors[] = __('Wrong password entered with Google Authenticator. Please try again.');
+                    }
+                }
+            } else {
+                $baseurl = Configure::read('MISP.baseurl');
+                if (!empty($baseurl)) {
+                    $name = parse_url($baseurl, PHP_URL_HOST);
+                } else {
+                    $name = "MISP";
+                }
+                $qrCodeUrl = $ga->getQRCodeGoogleUrl($name, $secret);
+                $qrContent = file_get_contents($qrCodeUrl);
+
+                $this->set('qr_content', base64_encode($qrContent));
+            }
+        } else { // Using the existing key
+            if (!empty($code)) {
+                if ($ga->verifyCode($existingKey, $code, 2)) {
+                    $this->Flash->success(
+                        __('Two-factor authentication passed.'),
+                        array('class' => 'alert alert-success'));
+                    $this->Auth->login($user);
+                    $this->_postlogin();
+                    return null;
+                } else {
+                    $errors[] = __('Wrong password entered with Google Authenticator. Please try again.');
+                }
+            }
+        }
+        if (!empty($errors)) {
+            foreach ($errors as $error) {
+                $this->Flash->error($error, array('class' => 'alert alert-danger'));
+            }
+        }
+
+        $this->set('secret', $secret);
+        $this->set('user_email', $this->request->data['User']['email']);
+        $this->set('user_pass', $this->request->data['User']['password']);
+        $this->set('has_2fa', (bool)$user['2fa_key']);
+        return $this->render('/Users/login_2fa');
+    }
+
+    public function reset_2fa($id = null, $alert = false) {
+        if (!$this->_isAdmin() && Configure::read('MISP.disableUserSelfManagement')) {
+            throw new MethodNotAllowedException('User self-management has been disabled on this instance.');
+        }
+        if (!$this->request->is('post') && !$this->request->is('put')) {
+            throw new MethodNotAllowedException(__('This functionality is only accessible via POST requests.'));
+        }
+        if ($id == 'me') {
+            $id = $this->Auth->user('id');
+        }
+        if (!$this->userRole['perm_auth']) {
+            throw new MethodNotAllowedException(__('Invalid action.'));
+        }
+        $this->User->id = $id;
+        $result = $this->User->saveField('2fa_key', '');
+
+        if ($result === false) {
+            throw new MethodNotAllowedException(__('Invalid user.'));
+        }
+
+        if (!$this->_isRest()) {
+            $this->Flash->success(__('Two-factor authentication reset.'), array('class' => 'alert alert-success'));
+            $this->_refreshAuth();
+            $this->redirect($this->referer());
+        } else {
+            return $this->RestResponse->saveSuccessResponse('User', 'reset_2fa', $id, $this->response->type(), __('Two-factor authentication reset.'));
+        }
     }
 }
