@@ -77,6 +77,10 @@
                         'url' => $baseurl . '/events/export'
                     ),
                     array(
+                        'text' => __('Flexible Export'),
+                        'url' => $baseurl . '/attributes/flexibleExport'
+                    ),
+                    array(
                         'text' => __('Automation'),
                         'url' => $baseurl . '/events/automation',
                         'requirement' => $this->Acl->canAccess('events', 'automation'),

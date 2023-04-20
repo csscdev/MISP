@@ -9,7 +9,7 @@ App::uses('AttachmentTool', 'Tools');
  */
 class AttributesController extends AppController
 {
-    public $components = array('RequestHandler');
+    public $components = array('RequestHandler', 'DateTimeTool');
 
     public $paginate = [
         'limit' => 60,
@@ -3016,5 +3016,132 @@ class AttributesController extends AppController
     {
         $sg = $this->Attribute->Event->SharingGroup->fetchAllAuthorised($this->Auth->user(), 'name', true, $sharingGroupId);
         return !empty($sg);
+    }
+
+    public function flexibleExport()
+    {
+        $maxPeriod = $this->_isSiteAdmin() ? 92 : 30;
+
+        list($exportTypes, $types, $allAttrs, $attributes) = $this->getDataForSelect();
+        $attributes = array_merge(['' => __('None')], $attributes);
+        $allAttrs = array_merge([''], $allAttrs);
+
+        if ($this->request->is('post') || $this->request->is('put')) {
+            $formData = $this->request->data;
+
+            $withError = false;
+            if (empty($formData['type']) || !array_key_exists($formData['type'], $types)) {
+                $this->Flash->error(__('Empty or invalid type.'));
+                $withError = true;
+            }
+            $fromDT = $this->DateTimeTool->getValidDateTime($formData['from']);
+            if (empty($fromDT)) {
+                $this->Flash->error(__('Empty or invalid date from.'));
+                $withError = true;
+            }
+            $tillDT = null;
+            if (!empty($formData['till'])) {
+                $tillDT = $this->DateTimeTool->getValidDateTime($formData['till']);
+                if (empty($tillDT)) {
+                    $this->Flash->error(__('Invalid date till.'));
+                    $withError = true;
+                }
+            }
+            if (!empty($formData['attribute']) && !in_array($formData['attribute'], $allAttrs)) {
+                $this->Flash->error(__('Invalid attribute.'));
+                $withError = true;
+            }
+            if ($fromDT) {
+                if (!$tillDT) {
+                    $tillDT = new DateTime();
+                }
+                if ($fromDT > $tillDT) {
+                    $this->Flash->error(__('Date from cannot be more than date till.'));
+                    $withError = true;
+                }
+                $diff_days = $this->DateTimeTool->getDaysNumber($fromDT->diff($tillDT));
+                if ($diff_days > $maxPeriod) {
+                    $this->Flash->error(__('Period cannot be more than %s days.', $maxPeriod));
+                    $withError = true;
+                }
+            }
+            if (!empty($formData['type']) && $formData['type'] === 'netfilter' && empty($formData['attribute'])) {
+                $this->Flash->error(__('An attribute is required for this type of filter.'));
+                $withError = true;
+            }
+
+            if ($withError === false) {
+                $type = $formData['type'];
+                $filters = [
+                    'returnFormat' => $type,
+                    'enforceWarninglist' => 1
+                ];
+                if (!empty($fromDT) && !empty($tillDT)) {
+                    $filters['date'] = [$fromDT->getTimestamp(), $tillDT->getTimestamp()];
+                } elseif (!empty($fromDT)) {
+                    $filters['date'] = [$fromDT->getTimestamp(), (new DateTime('now'))->getTimestamp()];
+                } elseif (!empty($tillDT)) {
+                    $filters['date'] = [$tillDT->getTimestamp() - $maxPeriod * 86400, $tillDT->getTimestamp()];
+                }
+                if (!empty($formData['attribute'])) {
+                    $filters['type'] = $formData['attribute'];
+                }
+                try {
+                    $scope = "attributes";
+                    $raw = $this->Attribute->restSearch($this->Auth->user(), $type, $filters);
+                    $content = $raw->intoString();
+                    $data = $content;
+                    $length = 0;
+                    if (!empty($content)) {
+                        try {
+                            if ($type == "json") {
+                                $decoded = JsonTool::decode($content)['response']['Attribute'];
+                                $length = !empty($decoded) ? count($decoded) : 0;
+                                $data = JsonTool::encode($decoded);
+                            } elseif ($type == "csv") {
+                                $rows = str_getcsv(trim($content), "\n");
+                                $length = count($rows) - 1;
+                            }
+                        } catch (Exception $e) {}
+                    }
+
+                    $this->set('found', [
+                        'len' => $length,
+                        'scope' => $scope
+                    ]);
+                    $this->set('data', $data);
+
+                } catch (Exception $e) {
+                    $this->Flash->error(__('Something went wrong. %s', $e->getMessage()));
+                }
+                $fileExtension = $exportTypes[$formData['type']][0];
+                $this->set('fileFormat', $formData['type']);
+                $this->set('fileMime', $formData['type'] == 'json' ? 'application/json' : 'text/plain');
+                $this->set('fileExtension', $fileExtension);
+            }
+        } else {
+            $this->request->data['from'] = date($this->DateTimeTool->dateFormat, strtotime("-1 days"));
+        }
+
+        $this->set('dateFormat', $this->DateTimeTool->dateFormat);
+        $this->set('types', $types);
+        $this->set('attributes', $attributes);
+    }
+
+    private function getDataForSelect(): array {
+        $types = [];
+        foreach ($this->Attribute->validFormats as $k => $type) {
+            $types[$k] = strtoupper($k) . '(' . $type[0] . ')';
+        }
+        $attributes = [];
+        $allAttrs = [];
+        foreach (Attribute::TYPE_GROUPINGS as $group => $attrs) {
+            $attributes[$group] = [];
+            foreach ($attrs as $attr) {
+                $attributes[$group][$attr] = $attr;
+                $allAttrs[] = $attr;
+            }
+        }
+        return array($this->Attribute->validFormats, $types, $allAttrs, $attributes);
     }
 }

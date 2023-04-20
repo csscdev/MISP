@@ -389,6 +389,11 @@ $divider = '<li class="divider"></li>';
                         'url' => $baseurl . '/events/export',
                         'text' => __('Export')
                     ));
+                    echo $this->element('/genericElements/SideMenu/side_menu_link', array(
+                        'element_id' => 'attributes_flexible_export',
+                        'url' => $baseurl . '/attributes/flexibleExport',
+                        'text' => __('Flexible Export')
+                    ));
                     if ($this->Acl->canAccess('events', 'automation')) {
                         echo $this->element('/genericElements/SideMenu/side_menu_link', array(
                             'element_id' => 'automation',
