@@ -67,6 +67,22 @@ $notificationsHtml .= '</table>';
         );
     }
 
+    if ($admin_view && $user['Role']['perm_auth']) {
+        if (!empty($user['User']['2fa_key'])) {
+            $table_data[] = array(
+                'key' => __('Two-factor authentication'),
+                'html' => sprintf(
+                    '<span class="quickSelect bold green"> ' . __('Enabled') . ' </span> (%s)',
+                    $this->Form->postLink(__('reset'), array('action' => 'reset_2fa', $user['User']['id']), array(), __('Are you sure you want to delete 2fa key?'))
+                )
+            );
+        } else {
+            $table_data[] = array(
+                'key' => __('Two-factor authentication'),
+                'html' => '<span class="bold red">' . __('Disabled') . '</span>');
+        }
+    }
+
     if (Configure::read('Plugin.CustomAuth_enable') && !empty($user['User']['external_auth_key'])) {
         $header = Configure::read('Plugin.CustomAuth_header') ?: 'Authorization';
         $table_data[] = array(
